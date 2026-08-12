@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>合成 DeepSeek V4 Pro 正式版</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body {
+    width:100%; height:100%; overflow:hidden;
+    background:#0b1530;
+    font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    touch-action:none; user-select:none; -webkit-user-select:none;
+  }
+  #wrap {
+    position:fixed; inset:0;
+    display:flex; align-items:center; justify-content:center;
+    background:
+      radial-gradient(ellipse at 50% -20%, #24407a 0%, transparent 60%),
+      radial-gradient(ellipse at 80% 110%, #14355c 0%, transparent 55%),
+      linear-gradient(180deg,#0b1530 0%, #10224a 55%, #0d1b3d 100%);
+  }
+  #stage { position:relative; }
+  canvas { display:block; border-radius:14px; }
+  #ui {
+    position:absolute; top:0; left:0; right:0;
+    display:flex; justify-content:space-between; align-items:flex-start;
+    padding:10px 12px; pointer-events:none; z-index:5;
+  }
+  .scorebox {
+    background:rgba(10,20,50,.55); backdrop-filter:blur(4px);
+    border:1px solid rgba(120,170,255,.35); border-radius:12px;
+    padding:6px 14px; text-align:center; color:#cfe3ff;
+  }
+  .scorebox .label { font-size:11px; opacity:.75; letter-spacing:1px; }
+  .scorebox .val { font-size:22px; font-weight:700; color:#fff; text-shadow:0 0 8px rgba(90,160,255,.8); }
+  #nextbox {
+    position:absolute; right:10px; bottom:10px; z-index:5;
+    background:rgba(10,20,50,.55); backdrop-filter:blur(4px);
+    border:1px solid rgba(120,170,255,.35); border-radius:12px;
+    padding:6px 10px; text-align:center; color:#cfe3ff; pointer-events:none;
+  }
+  #nextbox .label { font-size:11px; opacity:.75; }
+  #nextImg { height:52px; display:block; margin:4px auto 0; filter:drop-shadow(0 2px 4px rgba(0,0,0,.5)); }
+  #title {
+    position:absolute; left:50%; transform:translateX(-50%);
+    top:-2px; z-index:4; pointer-events:none; text-align:center; white-space:nowrap;
+    font-size:12px; color:rgba(170,205,255,.55); letter-spacing:2px; padding-top:12px;
+  }
+  #overlay {
+    position:absolute; inset:0; z-index:20; display:none;
+    align-items:center; justify-content:center; flex-direction:column;
+    background:rgba(5,10,30,.78); backdrop-filter:blur(6px); border-radius:14px;
+    color:#fff; text-align:center;
+  }
+  #overlay h1 { font-size:34px; margin-bottom:8px; text-shadow:0 0 18px rgba(100,160,255,.9); }
+  #overlay p  { font-size:16px; color:#bcd6ff; margin-bottom:22px; }
+  #overlay button {
+    font-size:18px; padding:12px 42px; border:none; border-radius:30px; cursor:pointer;
+    background:linear-gradient(135deg,#3d7bff,#7db0ff); color:#fff; font-weight:700;
+    box-shadow:0 4px 18px rgba(60,120,255,.55);
+  }
+  #banner {
+    position:absolute; top:34%; left:50%; transform:translate(-50%,-50%) scale(0);
+    z-index:15; pointer-events:none; text-align:center;
+    font-size:26px; font-weight:800; color:#ffe9a8;
+    text-shadow:0 0 14px rgba(255,200,80,.95), 0 2px 4px rgba(0,0,0,.6);
+    transition:transform .45s cubic-bezier(.2,1.6,.4,1); white-space:nowrap;
+  }
+  #banner.show { transform:translate(-50%,-50%) scale(1); }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <canvas id="game"></canvas>
+    <div id="title">合成 DeepSeek V4 Pro 正式版</div>
+    <div id="ui">
+      <div class="scorebox"><div class="label">得分</div><div class="val" id="score">0</div></div>
+      <div class="scorebox"><div class="label">最高分</div><div class="val" id="best">0</div></div>
+    </div>
+    <div id="nextbox">
+      <div class="label">下一个</div>
+      <img id="nextImg" alt="next">
+    </div>
+    <div id="banner"></div>
+    <div id="overlay">
+      <h1 id="ovTitle">游戏结束</h1>
+      <p id="ovText"></p>
+      <button id="restartBtn">再来一局</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/matter.min.js"></script>
+<script>
+"use strict";
+/* ================= 配置 ================= */
+/* 等级 1~11 —— 图片放在 img/level{n}.png（透明底 PNG）
+   1  GPT(带角白发Q版)      2  Claude(橙发Q版)
+   3  Qwen(蓝色圆环Q版)     4  GLM(猫耳Q版)
+   5  Kimi(月亮头饰Q版)     6  哒哒(灰发Q版·人鱼尾)
+   7  嘟嘟(金饰灰发Q版·人鱼尾) 8  深深(女仆Q版·人鱼尾)
+   9  算算(魔术帽Q版·人鱼尾)  10 大深深(女仆正常比例·人鱼尾)
+   11 大算算(魔术帽正常比例·人鱼尾) —— 终极目标 */
+const LEVELS = [null,
+  { name:"GPT",    r:26,  score:2    },
+  { name:"Claude", r:33,  score:4    },
+  { name:"Qwen",   r:40,  score:8    },
+  { name:"GLM",    r:48,  score:16   },
+  { name:"Kimi",   r:57,  score:32   },
+  { name:"哒哒",   r:67,  score:64   },
+  { name:"嘟嘟",   r:78,  score:128  },
+  { name:"深深",   r:90,  score:256  },
+  { name:"算算",   r:103, score:512  },
+  { name:"大深深", r:117, score:1024 },
+  { name:"大算算", r:132, score:2048 },
+];
+const MAX_LEVEL = 11;
+const SPAWN_WEIGHTS = [0, 30, 26, 20, 14, 10]; // 只随机生成 1~5 级
+const W = 420;                 // 逻辑游戏区宽度
+let H = 740;                   // 逻辑高度（按屏幕比例调整）
+const WALL = 12;               // 墙厚
+const DANGER_Y = 148;          // 红线位置
+const DROP_Y  = 92;            // 投放高度
+const DROP_COOLDOWN = 420;     // ms
+const OVER_DELAY = 1600;       // 越线持续判定 ms
+
+/* ================= 初始化 ================= */
+const { Engine, World, Bodies, Body, Events, Composite } = Matter;
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+let DPR = 1, VIEW_W = 0, VIEW_H = 0, SCALE = 1;
+
+function layout(){
+  const vw = window.innerWidth, vh = window.innerHeight;
+  // 游戏区固定逻辑宽度，等比放大到尽量占满屏幕
+  H = Math.max(640, Math.min(860, Math.round(W * vh / Math.max(vw*0.92, 320))));
+  const s = Math.min(vw / W, vh / H);
+  SCALE = s;
+  VIEW_W = Math.round(W * s); VIEW_H = Math.round(H * s);
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = VIEW_W * DPR; canvas.height = VIEW_H * DPR;
+  canvas.style.width = VIEW_W + "px"; canvas.style.height = VIEW_H + "px";
+}
+layout();
+
+const engine = Engine.create({ gravity:{ x:0, y:1.15 } });
+engine.positionIterations = 8;
+engine.velocityIterations = 6;
+
+let walls = [];
+function buildWalls(){
+  walls.forEach(w => World.remove(engine.world, w));
+  const opt = { isStatic:true, friction:.6, restitution:0, label:"wall" };
+  walls = [
+    Bodies.rectangle(W/2, H + WALL/2 - 2, W + 200, WALL + 8, opt),          // 底
+    Bodies.rectangle(-WALL/2 + 2, H/2, WALL, H*3, opt),                      // 左
+    Bodies.rectangle(W + WALL/2 - 2, H/2, WALL, H*3, opt),                   // 右
+  ];
+  World.add(engine.world, walls);
+}
+buildWalls();
+
+/* ================= 图片 ================= */
+const imgs = [];
+let loaded = 0;
+for (let i = 1; i <= MAX_LEVEL; i++){
+  const im = new Image();
+  im.src = `img/level${i}.png`;     // ← 素材路径：img/level1.png ~ img/level11.png
+  im.onload = () => { loaded++; };
+  imgs[i] = im;
+}
+
+/* ================= 状态 ================= */
+let score = 0;
+let best = +(localStorage.getItem("dsv4_best") || 0);
+let currentLevel = 0, nextLevel = 0;
+let dropX = W/2;
+let canDrop = false, gameOver = false, won = false;
+let overTimer = 0;
+let particles = [], rings = [], floatTexts = [];
+const scoreEl = document.getElementById("score");
+const bestEl  = document.getElementById("best");
+const nextImgEl = document.getElementById("nextImg");
+bestEl.textContent = best;
+
+function randSpawnLevel(){
+  const total = SPAWN_WEIGHTS.reduce((a,b)=>a+b,0);
+  let r = Math.random()*total;
+  for (let i=1;i<SPAWN_WEIGHTS.length;i++){ r -= SPAWN_WEIGHTS[i]; if (r<0) return i; }
+  return 1;
+}
+
+function makeBody(level, x, y){
+  const r = LEVELS[level].r;
+  const b = Bodies.circle(x, y, r, {
+    restitution:.12, friction:.35, frictionAir:.008, density:.0016 + level*.0002,
+    label:"chara"
+  });
+  b.level = level;
+  b.spawnT = performance.now();
+  b.popT = performance.now();   // 出生弹跳动画
+  return b;
+}
+
+function prepareNext(){
+  currentLevel = nextLevel || randSpawnLevel();
+  nextLevel = randSpawnLevel();
+  nextImgEl.src = imgs[nextLevel].src;
+  canDrop = true;
+}
+
+function clampDropX(x){
+  const r = LEVELS[currentLevel]?.r || 30;
+  return Math.max(r + 6, Math.min(W - r - 6, x));
+}
+
+function drop(){
+  if (!canDrop || gameOver || !currentLevel) return;
+  canDrop = false;
+  const b = makeBody(currentLevel, clampDropX(dropX), DROP_Y);
+  b.dropped = true;
+  World.add(engine.world, b);
+  playPop(currentLevel, .5);
+  currentLevel = 0;
+  setTimeout(()=>{ if(!gameOver) prepareNext(); }, DROP_COOLDOWN);
+}
+
+/* ================= 合成 ================= */
+const merging = new Set();
+Events.on(engine, "collisionStart", ev => {
+  for (const pair of ev.pairs){
+    const a = pair.bodyA, b = pair.bodyB;
+    if (a.label!=="chara" || b.label!=="chara") continue;
+    if (a.level !== b.level) continue;
+    if (a.level >= MAX_LEVEL) continue;
+    if (merging.has(a.id) || merging.has(b.id)) continue;
+    merging.add(a.id); merging.add(b.id);
+    const nl = a.level + 1;
+    const mx = (a.position.x + b.position.x)/2;
+    const my = (a.position.y + b.position.y)/2;
+    World.remove(engine.world, a);
+    World.remove(engine.world, b);
+    merging.delete(a.id); merging.delete(b.id);
+    const nb = makeBody(nl, mx, Math.min(my, H - LEVELS[nl].r - WALL));
+    Body.setVelocity(nb, { x:0, y:-2.2 });
+    World.add(engine.world, nb);
+    // 得分
+    const gain = LEVELS[nl].score;
+    score += gain;
+    scoreEl.textContent = score;
+    if (score > best){ best = score; bestEl.textContent = best; localStorage.setItem("dsv4_best", best); }
+    // 特效
+    burst(mx, my, LEVELS[nl].r, nl);
+    floatTexts.push({ x:mx, y:my - LEVELS[nl].r*.6, t:0, txt:"+"+gain });
+    playPop(nl, 1);
+    if (nl === MAX_LEVEL && !won){
+      won = true;
+      showBanner("🎉 合成 DeepSeek V4 Pro 正式版 —— 大算算降临！ 🎉", 4200);
+      fireworks();
+    } else if (nl >= 8){
+      showBanner(`✨ 合成了 ${LEVELS[nl].name}！`, 1600);
+    }
+  }
+});
+
+/* ================= 特效 ================= */
+function burst(x, y, r, level){
+  const hue = 200 + level*8;
+  for (let i=0;i<Math.min(14+level*2, 34);i++){
+    const ang = Math.random()*Math.PI*2, sp = 2 + Math.random()*4.5;
+    particles.push({ x, y, vx:Math.cos(ang)*sp, vy:Math.sin(ang)*sp - 1.4,
+      life:1, decay:.02 + Math.random()*.02, size:2.5+Math.random()*4,
+      color:`hsl(${hue + Math.random()*40-20},90%,${60+Math.random()*25}%)` });
+  }
+  rings.push({ x, y, r:r*.5, max:r*1.7, life:1 });
+}
+function fireworks(){
+  for (let k=0;k<5;k++){
+    setTimeout(()=>{
+      burst(60+Math.random()*(W-120), 160+Math.random()*220, 60, 9+Math.floor(Math.random()*3));
+    }, k*280);
+  }
+}
+function showBanner(txt, ms){
+  const el = document.getElementById("banner");
+  el.textContent = txt; el.classList.add("show");
+  clearTimeout(el._t);
+  el._t = setTimeout(()=>el.classList.remove("show"), ms);
+}
+
+/* ================= 音效 (WebAudio 合成) ================= */
+let actx = null;
+function playPop(level, vol){
+  try{
+    actx = actx || new (window.AudioContext||window.webkitAudioContext)();
+    if (actx.state === "suspended") actx.resume();
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type = "sine";
+    const f = 520 - level*28;
+    o.frequency.setValueAtTime(f, actx.currentTime);
+    o.frequency.exponentialRampToValueAtTime(f*1.8, actx.currentTime + .08);
+    g.gain.setValueAtTime(.12*vol, actx.currentTime);
+    g.gain.exponentialRampToValueAtTime(.001, actx.currentTime + .22);
+    o.connect(g).connect(actx.destination);
+    o.start(); o.stop(actx.currentTime + .25);
+  }catch(e){}
+}
+
+/* ================= 输入 ================= */
+function evX(e){
+  const rect = canvas.getBoundingClientRect();
+  const cx = (e.touches? e.touches[0].clientX : e.clientX) - rect.left;
+  return cx / SCALE;
+}
+let pointerDown = false;
+canvas.addEventListener("pointerdown", e => { pointerDown = true; dropX = clampDropX(evX(e)); });
+canvas.addEventListener("pointermove", e => { dropX = clampDropX(evX(e)); });
+window.addEventListener("pointerup", e => {
+  if (!pointerDown) return;
+  pointerDown = false;
+  if (!gameOver) drop();
+});
+window.addEventListener("resize", () => layout());
+
+document.getElementById("restartBtn").addEventListener("click", restart);
+function restart(){
+  Composite.allBodies(engine.world).forEach(b => { if (b.label==="chara") World.remove(engine.world, b); });
+  score = 0; scoreEl.textContent = 0;
+  gameOver = false; won = false; overTimer = 0;
+  particles = []; rings = []; floatTexts = [];
+  document.getElementById("overlay").style.display = "none";
+  currentLevel = 0; nextLevel = 0;
+  prepareNext();
+}
+
+/* ================= 失败判定 ================= */
+function checkOver(dt){
+  if (gameOver) return;
+  let danger = false;
+  for (const b of Composite.allBodies(engine.world)){
+    if (b.label!=="chara") continue;
+    if (performance.now() - b.spawnT < 900) continue;      // 刚投放的宽限
+    if (b.position.y - LEVELS[b.level].r < DANGER_Y && Math.abs(b.velocity.y) < 1.2){
+      danger = true; break;
+    }
+  }
+  overTimer = danger ? overTimer + dt : 0;
+  if (overTimer > OVER_DELAY) endGame();
+}
+function endGame(){
+  gameOver = true; canDrop = false;
+  document.getElementById("ovTitle").textContent = won ? "通关达成！" : "游戏结束";
+  document.getElementById("ovText").textContent = `本局得分 ${score} · 最高分 ${best}`;
+  document.getElementById("overlay").style.display = "flex";
+}
+
+/* ================= 渲染 ================= */
+function drawBody(b){
+  const L = LEVELS[b.level], img = imgs[b.level];
+  const { x, y } = b.position;
+  // 出生弹跳
+  const age = (performance.now() - b.popT)/220;
+  const pop = age < 1 ? 0.72 + 0.28*(1 - Math.pow(1-age, 3)) * (1 + .18*Math.sin(age*Math.PI)) : 1;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(b.angle);
+  ctx.scale(pop, pop);
+  if (img && img.complete && img.naturalWidth){
+    const d = L.r * 2 * 1.22;                      // 图片略大于碰撞圆，露出头和尾
+    const s = d / Math.max(img.naturalWidth, img.naturalHeight);
+    const w = img.naturalWidth*s, h = img.naturalHeight*s;
+    ctx.drawImage(img, -w/2, -h/2, w, h);
+  } else {
+    ctx.fillStyle = `hsl(${200+b.level*12},70%,60%)`;
+    ctx.beginPath(); ctx.arc(0,0,L.r,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="#fff"; ctx.font="bold 20px sans-serif"; ctx.textAlign="center";
+    ctx.fillText(b.level, 0, 7);
+  }
+  ctx.restore();
+}
+
+let lastT = performance.now();
+function frame(now){
+  const dt = Math.min(now - lastT, 34);
+  lastT = now;
+  if (!gameOver) Engine.update(engine, dt);
+  checkOver(dt);
+
+  ctx.setTransform(DPR*SCALE, 0, 0, DPR*SCALE, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  // 背景水下感
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,"rgba(40,80,160,.28)");
+  g.addColorStop(.5,"rgba(20,50,110,.18)");
+  g.addColorStop(1,"rgba(10,30,80,.30)");
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  // 边框
+  ctx.strokeStyle = "rgba(110,160,255,.35)"; ctx.lineWidth = 3;
+  ctx.strokeRect(1.5, 1.5, W-3, H-3);
+
+  // 红线
+  const danger = overTimer > 0;
+  ctx.strokeStyle = danger ? `rgba(255,60,60,${.55+.45*Math.sin(now/90)})` : "rgba(255,90,90,.4)";
+  ctx.lineWidth = danger ? 3 : 2;
+  ctx.setLineDash([10,8]);
+  ctx.beginPath(); ctx.moveTo(0, DANGER_Y); ctx.lineTo(W, DANGER_Y); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 待投放角色 + 瞄准线
+  if (canDrop && currentLevel && !gameOver){
+    const r = LEVELS[currentLevel].r;
+    const x = clampDropX(dropX);
+    ctx.strokeStyle = "rgba(160,200,255,.28)"; ctx.lineWidth = 2;
+    ctx.setLineDash([4,10]);
+    ctx.beginPath(); ctx.moveTo(x, DROP_Y + r); ctx.lineTo(x, H - 8); ctx.stroke();
+    ctx.setLineDash([]);
+    const img = imgs[currentLevel];
+    if (img.complete && img.naturalWidth){
+      const d = r*2*1.22, s = d/Math.max(img.naturalWidth, img.naturalHeight);
+      ctx.globalAlpha = .95;
+      ctx.drawImage(img, x - img.naturalWidth*s/2, DROP_Y - img.naturalHeight*s/2, img.naturalWidth*s, img.naturalHeight*s);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // 物理体
+  for (const b of Composite.allBodies(engine.world)){
+    if (b.label === "chara") drawBody(b);
+  }
+
+  // 粒子
+  for (let i=particles.length-1;i>=0;i--){
+    const p = particles[i];
+    p.x += p.vx; p.y += p.vy; p.vy += .12; p.life -= p.decay;
+    if (p.life <= 0){ particles.splice(i,1); continue; }
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.size*p.life, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  // 光圈
+  for (let i=rings.length-1;i>=0;i--){
+    const r = rings[i];
+    r.r += (r.max - r.r)*.18; r.life -= .05;
+    if (r.life <= 0){ rings.splice(i,1); continue; }
+    ctx.globalAlpha = r.life*.8;
+    ctx.strokeStyle = "#aee0ff"; ctx.lineWidth = 3*r.life;
+    ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, Math.PI*2); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // 飘分
+  for (let i=floatTexts.length-1;i>=0;i--){
+    const f = floatTexts[i];
+    f.t += dt/1000;
+    if (f.t > 1){ floatTexts.splice(i,1); continue; }
+    ctx.globalAlpha = 1 - f.t;
+    ctx.fillStyle = "#ffe9a0";
+    ctx.font = "bold 20px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText(f.txt, f.x, f.y - f.t*46);
+  }
+  ctx.globalAlpha = 1;
+
+  requestAnimationFrame(frame);
+}
+
+prepareNext();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
